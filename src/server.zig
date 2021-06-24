@@ -167,6 +167,7 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     .headers = resp.Headers.init(stack_allocator.get()),
                     .buffered_writer = std.io.bufferedWriter(self.stream.writer()),
                     .is_flushed = false,
+                    .write_active = false,
                     .body = body.writer(),
                 };
 
@@ -181,6 +182,19 @@ fn ClientFn(comptime handler: RequestHandler) type {
                     error.HeadersTooLarge => return response.writeHeader(.request_header_fields_too_large),
                     else => return response.writeHeader(.bad_request),
                 };
+
+                const request_headers = try parsed_request.headers(stack_allocator.get());
+                if(request_headers.get("Expect")) |expect| {
+                    if (!std.mem.eql(u8, expect, "100-continue")) { 
+                        // According to specification, returing 417 (expectation failed) is an OPTIONAL behaviour
+                        try response.writeHeader(.expectation_failed);
+                    } else if (parsed_request.body().len <= 0) {
+                        // Sending an Expect header without a body is illegal according to specification
+                        try response.writeHeader(.bad_request);
+                    } else {
+                        try response.writeHeader(.@"continue");
+                    }
+                }
 
                 handler(&response, parsed_request) catch |err| {
                     try response.writeHeader(.bad_request);
